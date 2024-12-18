@@ -8,6 +8,18 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from database import Base, BitcoinPrice
 
+import logging
+import logfire
+from logging import basicConfig, getLogger
+
+logfire.configure()
+basicConfig(handlers=[logfire.LogfireLoggingHandler()])
+logger = getLogger(__name__)
+logger.setLevel(logging.INFO)
+logfire.instrument_requests()
+logfire.instrument_sqlalchemy()
+
+
 load_dotenv()
 
 POSTGRES_USER = os.getenv("POSTGRES_USER")
@@ -16,11 +28,6 @@ POSTGRES_HOST = os.getenv("POSTGRES_HOST")
 POSTGRES_PORT = os.getenv("POSTGRES_PORT")
 POSTGRES_DB = os.getenv("POSTGRES_DB")
 
-# print(f"POSTGRES_USER={POSTGRES_USER}")
-# print(f"POSTGRES_PASSWORD={POSTGRES_PASSWORD}")
-# print(f"POSTGRES_HOST={POSTGRES_HOST}")
-# print(f"POSTGRES_PORT={POSTGRES_PORT}")
-# print(f"POSTGRES_DB={POSTGRES_DB}")
 
 DATABASE_URL = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
 
@@ -29,7 +36,6 @@ Session = sessionmaker(bind=engine)
 
 def create_table():
     Base.metadata.create_all(engine)
-    print(' [*] Table created')
 
 create_table()
 
@@ -66,21 +72,36 @@ def load(data):
     session.close()
     print(f'[{data["timestamp"]}] New record inserted')
 
+def logfire_bitcoin():
+
+    with logfire.span('Starting pipeline'):
+
+        with logfire.span('Extracting data from API CoinBase'):
+            data = extract()
+
+        if not data:
+            logger.error('No data extracted. Aborting pipeline')
+            return
+        
+        with logfire.span('Transforming data'):
+            data_transformed = transform(data)
+
+        with logfire.span('Loading data into database'):
+            load(data_transformed)
+
+        logger.info('Pipeline finished successfully')
+
 if __name__ == '__main__':
     create_table()
-    print(' [*] Table created')
+    logger.info('Starting pipeline')
 
     while True:
         try:
-            data = extract()
-            if data:
-                data_transformed = transform(data)
-                print ('Data transformed:', data_transformed)
-                load(data_transformed)
+                logfire_bitcoin()
                 time.sleep(15)
         except KeyboardInterrupt:
-            print(' [*] Exiting...')
+            logger.info('Pipeline stopped by user')
             break
         except Exception as e:
-            print(f'Error: {e}')
+            logger.error(f'An error occurred: {e}')
             time.sleep(15)
